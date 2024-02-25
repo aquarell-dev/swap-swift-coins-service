@@ -2,7 +2,7 @@ import asyncio
 import re
 from collections import Counter
 from dataclasses import asdict
-from typing import List, Dict, Optional, Callable, Awaitable, Type
+from typing import Awaitable, Callable, Dict, List, Optional, Type
 
 import ccxt
 from ccxt.async_support import Exchange
@@ -22,6 +22,7 @@ class CoinsService:
         return self._loading
 
     def get_coins(self) -> dict[str, dict[str, dict]]:
+        self._coin_mapping
         return {
             exchange_name: {
                 coin_name: {
@@ -47,14 +48,17 @@ class CoinsService:
 
         common_coins = self._filter_elements(sorted_coins)
 
-        coin_mapping: Dict[str, Dict[str, Coin]] = {
-            coin.exchange.name: {
-                coin.coin: coin
-            }
-            for coin in common_coins
-        }
+        coin_mapping: Dict[str, Dict[str, Coin]] = {}
 
-        tasks = [self._fetch_networks(exchange_name, coins) for exchange_name, coins in coin_mapping.items()]
+        for coin in common_coins:
+            if coin.exchange.name not in coin_mapping:
+                coin_mapping[coin.exchange.name] = {}
+            coin_mapping[coin.exchange.name][coin.coin] = coin
+
+        tasks = [
+            self._fetch_networks(exchange_name, coins)
+            for exchange_name, coins in coin_mapping.items()
+        ]
         await asyncio.gather(*tasks)
 
         await asyncio.gather(*[exchange.close() for exchange in self._exchanges])
@@ -64,7 +68,9 @@ class CoinsService:
 
     async def _fetch_networks(self, exchange_name: str, coins: Dict[str, Coin]):
         exchange = self._exchange_mapping[exchange_name]
-        networks = await _async_retry(lambda: exchange.fetch_deposit_withdraw_fees(list(coins.keys())))
+        networks = await _async_retry(
+            lambda: exchange.fetch_deposit_withdraw_fees(list(coins.keys()))
+        )
 
         for coin, networks in networks.items():
             try:
@@ -72,8 +78,8 @@ class CoinsService:
                     Network(**network) for network in networks
                     if network.get('percentage') == 0
                 ]
-            except Exception as e:
-                print(e)
+            except (ValueError, KeyError, AttributeError):
+                continue
 
         logger.info(f"Fetched networks for {exchange_name}")
 
@@ -112,13 +118,15 @@ class CoinsService:
         """
         tickers = await _async_retry(lambda: exchange.fetch_tickers())
 
-        coins = [self._get_coin_from_ticker(ticker, ticker_data, exchange) for ticker, ticker_data in tickers.items()]
+        coins = [self._get_coin_from_ticker(ticker, ticker_data, exchange) for ticker, ticker_data
+                 in tickers.items()]
 
         logger.info(f"Fetched {len(coins)} coins for {exchange.name}")
 
         return [coin for coin in coins if coin is not None]
 
-    def _get_coin_from_ticker(self, ticker: str, ticker_data: dict, exchange: Exchange) -> Optional[Coin]:
+    def _get_coin_from_ticker(self, ticker: str, ticker_data: dict, exchange: Exchange) -> Optional[
+        Coin]:
         if '/' not in ticker:
             return
 
@@ -134,10 +142,10 @@ class CoinsService:
 
 
 async def _async_retry(
-        func: Callable[..., Awaitable],
-        retries: int = 7,
-        delay: float = 3.0,
-        backoff: float = 4.0,
+    func: Callable[..., Awaitable],
+    retries: int = 7,
+    delay: float = 3.0,
+    backoff: float = 4.0,
 ):
     for attempt in range(retries + 1):
         try:
